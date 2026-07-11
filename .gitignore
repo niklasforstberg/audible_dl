@@ -1,0 +1,4 @@
+auth.json
+downloads/
+__pycache__/
+*.pyc
