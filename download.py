@@ -1,6 +1,6 @@
-"""Ladda ner hela biblioteket, en bok i taget med en slumpad paus emellan.
+"""Download the whole library, one book at a time with a randomized pause in between.
 
-Kör auth.py först för att skapa auth.json.
+Run auth.py first to create auth.json.
 """
 import os
 import random
@@ -13,14 +13,14 @@ import httpx
 AUTH_FILE = "auth.json"
 OUT_DIR = Path.home() / "books"
 
-# Slumpad paus mellan varje bok (sekunder). Skonsamt mot servern.
+# Randomized pause between each book (seconds). Easy on the server.
 MIN_DELAY = 45
 MAX_DELAY = 180
 
-# Ljudkvalitet: "High", "Normal" eller "Extreme".
+# Audio quality: "High", "Normal" or "Extreme".
 QUALITY = "High"
 
-# CloudFront blockar okända User-Agents; app-lik UA krävs för nedladdningen.
+# CloudFront blocks unknown User-Agents; an app-like UA is required for the download.
 DOWNLOAD_UA = {"User-Agent": "Audible, iPhone, 4.0.1 (573), iPhone 12 Pro, iOS 15.0.2"}
 
 
@@ -47,7 +47,7 @@ def download_book(client, item):
     title = item.get("title", asin)
     safe_title = "".join(c for c in title if c.isalnum() or c in " -_").strip()
 
-    # Hämta nedladdningslänk för AAXC-filen.
+    # Get the download link for the AAXC file.
     dl = client.post(
         f"content/{asin}/licenserequest",
         body={
@@ -59,14 +59,14 @@ def download_book(client, item):
     )
     content_metadata = dl["content_license"]["content_metadata"]
     url = content_metadata["content_url"]["offline_url"]
-    ext = url.split("?")[0].rsplit(".", 1)[-1].lower()  # aax eller aaxc
+    ext = url.split("?")[0].rsplit(".", 1)[-1].lower()  # aax or aaxc
 
     out_path = OUT_DIR / f"{safe_title} [{asin}].{ext}"
     if out_path.exists():
-        print(f"  hoppar över (finns redan): {out_path.name}")
+        print(f"  skipping (already exists): {out_path.name}")
         return
 
-    # Spara även voucher (nycklar) för senare avkodning, om den finns (gäller AAXC).
+    # Also save the voucher (keys) for later decoding, if present (applies to AAXC).
     voucher = dl["content_license"].get("license_response")
     if voucher:
         (OUT_DIR / f"{safe_title} [{asin}].voucher").write_text(str(voucher))
@@ -76,19 +76,19 @@ def download_book(client, item):
         with open(out_path, "wb") as f:
             for chunk in r.iter_bytes(chunk_size=1 << 16):
                 f.write(chunk)
-    print(f"  klar: {out_path.name}")
+    print(f"  done: {out_path.name}")
 
 
 def main():
     if not os.path.exists(AUTH_FILE):
-        raise SystemExit("Ingen auth.json — kör auth.py först.")
+        raise SystemExit("No auth.json — run auth.py first.")
 
     OUT_DIR.mkdir(exist_ok=True)
     auth = audible.Authenticator.from_file(AUTH_FILE)
 
     with audible.Client(auth=auth) as client:
         library = get_library(client)
-        print(f"Hittade {len(library)} böcker i biblioteket.")
+        print(f"Found {len(library)} books in the library.")
 
         for i, item in enumerate(library, 1):
             title = item.get("title", item["asin"])
@@ -96,14 +96,14 @@ def main():
             try:
                 download_book(client, item)
             except Exception as e:
-                print(f"  fel: {e}")
+                print(f"  error: {e}")
 
             if i < len(library):
                 delay = random.uniform(MIN_DELAY, MAX_DELAY)
-                print(f"  väntar {delay:.0f}s ...")
+                print(f"  waiting {delay:.0f}s ...")
                 time.sleep(delay)
 
-    print("Klart.")
+    print("Done.")
 
 
 if __name__ == "__main__":

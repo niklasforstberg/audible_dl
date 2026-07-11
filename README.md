@@ -1,29 +1,29 @@
 # audible_dl
 
-Laddar ner ditt eget Audible-bibliotek, en bok i taget med en slumpad paus emellan.
+Downloads your own Audible library, one book at a time with a randomized pause in between.
 
-## Använd
+## Usage
 
 ```bash
 pip install -r requirements.txt
-python auth.py       # logga in en gång via webbläsaren, skapar auth.json
-python download.py   # laddar ner allt till ~/books
-python decode.py     # avkodar .aax → .m4b (DRM-fritt)
+python auth.py       # log in once via the browser, creates auth.json
+python download.py   # downloads everything to ~/books
+python decode.py     # decodes .aax → .m4b (DRM-free)
 ```
 
-## Noter
+## Notes
 
-- `auth.json` innehåller din session — dela inte, checka inte in i git.
-- Inloggningen sker i din vanliga webbläsare (`from_login_external`). Landar du
-  på en "Page not found"-sida är det rätt — kopiera den URL:en tillbaka in i
-  terminalen. På macOS importeras `readline` så långa URL:er inte klipps av.
-- Filerna är AAX (DRM). Avkodningen använder kontots **activation_bytes**
-  (hämtas automatiskt av `decode.py` via `auth.json`) tillsammans med ffmpeg.
-- Nedladdningen kräver en app-lik `User-Agent`, annars svarar CloudFront `403`.
-- Pausen (`MIN_DELAY`/`MAX_DELAY` i `download.py`) är till för att inte belasta
-  servern i onödan.
+- `auth.json` contains your session — don't share it, don't commit it to git.
+- Login happens in your regular browser (`from_login_external`). Landing on a
+  "Page not found" page is expected — copy that URL back into the terminal.
+  On macOS, `readline` is imported so long URLs don't get truncated.
+- Files are AAX (DRM). Decoding uses the account's **activation_bytes**
+  (fetched automatically by `decode.py` via `auth.json`) together with ffmpeg.
+- The download requires an app-like `User-Agent`, otherwise CloudFront responds `403`.
+- The pause (`MIN_DELAY`/`MAX_DELAY` in `download.py`) exists to avoid
+  unnecessarily loading the server.
 
-## Krav
+## Requirements
 
-- Python 3.10–3.12 (`audible`-biblioteket stödjer inte 3.13+).
-- `ffmpeg` i PATH (för `decode.py`).
+- Python 3.10–3.12 (the `audible` library doesn't support 3.13+).
+- `ffmpeg` in PATH (for `decode.py`).

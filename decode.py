@@ -1,6 +1,6 @@
-"""Avkodar nedladdade .aax-filer till DRM-fria .m4b med ffmpeg.
+"""Decodes downloaded .aax files into DRM-free .m4b using ffmpeg.
 
-Kör download.py först. Kräver ffmpeg i PATH.
+Run download.py first. Requires ffmpeg in PATH.
 """
 import subprocess
 from pathlib import Path
@@ -17,14 +17,14 @@ def main():
 
     aax_files = sorted(BOOKS_DIR.glob("*.aax"))
     if not aax_files:
-        raise SystemExit(f"Inga .aax-filer i {BOOKS_DIR} — kör download.py först.")
+        raise SystemExit(f"No .aax files in {BOOKS_DIR} — run download.py first.")
 
-    print(f"Hittade {len(aax_files)} filer att avkoda.")
+    print(f"Found {len(aax_files)} files to decode.")
     for i, aax in enumerate(aax_files, 1):
         out = aax.with_suffix(".m4b")
         print(f"[{i}/{len(aax_files)}] {aax.name}")
         if out.exists():
-            print(f"  hoppar över (finns redan): {out.name}")
+            print(f"  skipping (already exists): {out.name}")
             continue
 
         result = subprocess.run(
@@ -39,12 +39,12 @@ def main():
             text=True,
         )
         if result.returncode == 0:
-            print(f"  klar: {out.name}")
+            print(f"  done: {out.name}")
         else:
-            print(f"  fel: {result.stderr.strip().splitlines()[-1]}")
-            out.unlink(missing_ok=True)  # ta bort halvfärdig fil
+            print(f"  error: {result.stderr.strip().splitlines()[-1]}")
+            out.unlink(missing_ok=True)  # remove partial file
 
-    print("Klart.")
+    print("Done.")
 
 
 if __name__ == "__main__":
