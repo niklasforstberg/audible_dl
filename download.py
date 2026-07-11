@@ -11,7 +11,7 @@ import audible
 import httpx
 
 AUTH_FILE = "auth.json"
-OUT_DIR = Path("downloads")
+OUT_DIR = Path.home() / "books"
 
 # Slumpad paus mellan varje bok (sekunder). Skonsamt mot servern.
 MIN_DELAY = 45
