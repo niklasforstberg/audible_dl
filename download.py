@@ -20,6 +20,9 @@ MAX_DELAY = 180
 # Ljudkvalitet: "High", "Normal" eller "Extreme".
 QUALITY = "High"
 
+# CloudFront blockar okända User-Agents; app-lik UA krävs för nedladdningen.
+DOWNLOAD_UA = {"User-Agent": "Audible, iPhone, 4.0.1 (573), iPhone 12 Pro, iOS 15.0.2"}
+
 
 def get_library(client):
     books = []
@@ -54,20 +57,21 @@ def download_book(client, item):
             "response_groups": "last_position_heard,content_reference,chapter_info",
         },
     )
-    content_ref = dl["content_license"]["content_metadata"]["content_reference"]
-    url = content_ref["content_url"]  # ibland i "offline_url"
-    ext = content_ref.get("content_format", "aaxc").lower()
+    content_metadata = dl["content_license"]["content_metadata"]
+    url = content_metadata["content_url"]["offline_url"]
+    ext = url.split("?")[0].rsplit(".", 1)[-1].lower()  # aax eller aaxc
 
     out_path = OUT_DIR / f"{safe_title} [{asin}].{ext}"
     if out_path.exists():
         print(f"  hoppar över (finns redan): {out_path.name}")
         return
 
-    # Spara även voucher (nycklar) för senare avkodning.
-    voucher = dl["content_license"]["license_response"]
-    (OUT_DIR / f"{safe_title} [{asin}].voucher").write_text(str(voucher))
+    # Spara även voucher (nycklar) för senare avkodning, om den finns (gäller AAXC).
+    voucher = dl["content_license"].get("license_response")
+    if voucher:
+        (OUT_DIR / f"{safe_title} [{asin}].voucher").write_text(str(voucher))
 
-    with httpx.stream("GET", url, follow_redirects=True, timeout=None) as r:
+    with httpx.stream("GET", url, follow_redirects=True, timeout=None, headers=DOWNLOAD_UA) as r:
         r.raise_for_status()
         with open(out_path, "wb") as f:
             for chunk in r.iter_bytes(chunk_size=1 << 16):
