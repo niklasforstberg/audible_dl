@@ -8,8 +8,13 @@ Downloads your own Audible library, one book at a time with a randomized pause i
 pip install -r requirements.txt
 python auth.py       # log in once via the browser, creates auth.json
 python download.py   # downloads everything to ~/books
+# or: python download.py /mnt/storage/books   # to a custom folder
 python decode.py     # decodes .aax → .m4b (DRM-free)
+# or: python decode.py /mnt/storage/books   # from a custom folder
+python check.py      # verify downloaded books match the server's size
 ```
+
+`check.py` also takes an optional folder argument (`python check.py /mnt/storage/books`).
 
 ## Notes
 

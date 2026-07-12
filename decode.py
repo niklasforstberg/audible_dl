@@ -1,23 +1,36 @@
 """Decodes downloaded .aax files into DRM-free .m4b using ffmpeg.
 
 Run download.py first. Requires ffmpeg in PATH.
+
+Usage: python decode.py [BOOKS_DIR]   (BOOKS_DIR defaults to ~/books)
 """
+import argparse
 import subprocess
 from pathlib import Path
 
 import audible
 
 AUTH_FILE = "auth.json"
-BOOKS_DIR = Path.home() / "books"
+DEFAULT_BOOKS_DIR = Path.home() / "books"
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "books_dir",
+        nargs="?",
+        default=str(DEFAULT_BOOKS_DIR),
+        help="folder with .aax files (default: ~/books)",
+    )
+    args = parser.parse_args()
+    books_dir = Path(args.books_dir)
+
     auth = audible.Authenticator.from_file(AUTH_FILE)
     activation_bytes = auth.get_activation_bytes()
 
-    aax_files = sorted(BOOKS_DIR.glob("*.aax"))
+    aax_files = sorted(books_dir.glob("*.aax"))
     if not aax_files:
-        raise SystemExit(f"No .aax files in {BOOKS_DIR} — run download.py first.")
+        raise SystemExit(f"No .aax files in {books_dir} — run download.py first.")
 
     print(f"Found {len(aax_files)} files to decode.")
     for i, aax in enumerate(aax_files, 1):
