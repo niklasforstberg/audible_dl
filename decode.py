@@ -50,6 +50,7 @@ def main():
             ],
             capture_output=True,
             text=True,
+            errors="replace",
         )
         if result.returncode == 0:
             print(f"  done: {out.name}")
