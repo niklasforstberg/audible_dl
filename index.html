@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ljudböcker</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: system-ui, sans-serif;
+    margin: 0;
+    padding: 2rem;
+    background: Canvas;
+    color: CanvasText;
+  }
+  h1 { margin: 0 0 1.5rem; font-size: 1.4rem; }
+  #status { opacity: 0.6; }
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 1.5rem;
+  }
+  .book {
+    display: flex;
+    flex-direction: column;
+    text-decoration: none;
+    color: inherit;
+  }
+  .book img, .book .noart {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border-radius: 8px;
+    background: color-mix(in srgb, CanvasText 12%, Canvas);
+  }
+  .book .noart {
+    display: grid;
+    place-items: center;
+    font-size: 0.8rem;
+    opacity: 0.5;
+    text-align: center;
+    padding: 0.5rem;
+    box-sizing: border-box;
+  }
+  .book .title {
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    line-height: 1.3;
+  }
+  .book:hover .title { text-decoration: underline; }
+</style>
+</head>
+<body>
+<h1>Ljudböcker</h1>
+<div id="status">Laddar…</div>
+<div id="grid"></div>
+
+<script>
+const IMAGE_EXTS = ["jpg", "jpeg", "png", "bmp", "gif"];
+
+// Filename (no extension) -> display title
+function titleFromName(name) {
+  return name.replace(/_/g, " ").trim();
+}
+
+// Split a listing filename into [stem, extension-lowercased]
+function splitName(name) {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return [name, ""];
+  return [name.slice(0, dot), name.slice(dot + 1).toLowerCase()];
+}
+
+async function load() {
+  const status = document.getElementById("status");
+  const grid = document.getElementById("grid");
+
+  let html;
+  try {
+    html = await (await fetch("./")).text();
+  } catch (e) {
+    status.textContent = "Kunde inte läsa kataloglistningen: " + e;
+    return;
+  }
+
+  // Parse the server's directory listing and collect filenames from its links.
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const books = [];       // { href, stem }
+  const covers = new Map(); // stem -> href
+
+  for (const a of doc.querySelectorAll("a[href]")) {
+    let href = a.getAttribute("href");
+    if (!href || href.startsWith("/") || href.startsWith("?") || href.includes("..")) continue;
+    href = href.replace(/^\.\//, "").replace(/\/$/, "");
+    const name = decodeURIComponent(href);
+    const [stem, ext] = splitName(name);
+    if (ext === "m4b") books.push({ href, stem });
+    else if (IMAGE_EXTS.includes(ext)) covers.set(stem, href);
+  }
+
+  if (books.length === 0) {
+    status.textContent = "Inga .m4b-filer hittades i den här mappen.";
+    return;
+  }
+
+  books.sort((a, b) => a.stem.localeCompare(b.stem, "sv"));
+  status.textContent = books.length + " böcker";
+
+  for (const book of books) {
+    const link = document.createElement("a");
+    link.className = "book";
+    link.href = book.href;
+
+    const cover = covers.get(book.stem);
+    if (cover) {
+      const img = document.createElement("img");
+      img.src = cover;
+      img.alt = titleFromName(book.stem);
+      img.loading = "lazy";
+      link.appendChild(img);
+    } else {
+      const noart = document.createElement("div");
+      noart.className = "noart";
+      noart.textContent = "Inget omslag";
+      link.appendChild(noart);
+    }
+
+    const title = document.createElement("div");
+    title.className = "title";
+    title.textContent = titleFromName(book.stem);
+    link.appendChild(title);
+
+    grid.appendChild(link);
+  }
+}
+
+load();
+</script>
+</body>
+</html>
