@@ -6,6 +6,7 @@ Downloads nothing — only reads the size from the server. Run after download.py
 Usage: python check.py [BOOKS_DIR]   (BOOKS_DIR defaults to ~/books)
 """
 import argparse
+import logging
 import os
 import random
 import time
@@ -17,6 +18,22 @@ import httpx
 from download import AUTH_FILE, DOWNLOAD_UA, QUALITY, get_library
 
 DEFAULT_BOOKS_DIR = Path.home() / "books"
+DEFAULT_LOG_FILE = "check.log"
+
+log = logging.getLogger("check")
+
+
+def setup_logging(log_file):
+    """Log to the console (plain) and to a file (with timestamps)."""
+    log.setLevel(logging.INFO)
+
+    console = logging.StreamHandler()
+    console.setFormatter(logging.Formatter("%(message)s"))
+    log.addHandler(console)
+
+    file = logging.FileHandler(log_file, mode="w", encoding="utf-8")
+    file.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    log.addHandler(file)
 
 # Small polite pause between the metadata calls (seconds).
 MIN_DELAY = 1
@@ -66,8 +83,15 @@ def main():
         default=str(DEFAULT_BOOKS_DIR),
         help="folder with the downloaded books (default: ~/books)",
     )
+    parser.add_argument(
+        "--log",
+        default=DEFAULT_LOG_FILE,
+        help=f"file to append the log to (default: {DEFAULT_LOG_FILE})",
+    )
     args = parser.parse_args()
     books_dir = Path(args.books_dir)
+
+    setup_logging(args.log)
 
     if not os.path.exists(AUTH_FILE):
         raise SystemExit("No auth.json — run auth.py first.")
@@ -77,7 +101,7 @@ def main():
 
     with audible.Client(auth=auth) as client:
         library = get_library(client)
-        print(f"Checking {len(library)} books in {books_dir} ...")
+        log.info(f"Checking {len(library)} books in {books_dir} ...")
 
         for i, item in enumerate(library, 1):
             asin = item["asin"]
@@ -89,35 +113,35 @@ def main():
             local = find_local(books_dir, stem)
             if local is None:
                 if has_part(books_dir, stem):
-                    print(f"{prefix} INCOMPLETE (.part only): {stem}")
+                    log.info(f"{prefix} INCOMPLETE (.part only): {stem}")
                     counts["incomplete"] += 1
                 else:
-                    print(f"{prefix} MISSING: {stem}")
+                    log.info(f"{prefix} MISSING: {stem}")
                     counts["missing"] += 1
                 continue
 
             try:
                 exp = expected_size(client, asin)
             except Exception as e:
-                print(f"{prefix} ERROR checking {stem}: {e}")
+                log.info(f"{prefix} ERROR checking {stem}: {e}")
                 counts["unknown"] += 1
             else:
                 actual = local.stat().st_size
                 if exp is None:
-                    print(f"{prefix} UNKNOWN (server gave no size): {local.name} — local {actual} bytes")
+                    log.info(f"{prefix} UNKNOWN (server gave no size): {local.name} — local {actual} bytes")
                     counts["unknown"] += 1
                 elif actual == exp:
-                    print(f"{prefix} OK: {local.name} ({actual} bytes)")
+                    log.info(f"{prefix} OK: {local.name} ({actual} bytes)")
                     counts["ok"] += 1
                 else:
-                    print(f"{prefix} MISMATCH: {local.name} — local {actual}, expected {exp}")
+                    log.info(f"{prefix} MISMATCH: {local.name} — local {actual}, expected {exp}")
                     counts["mismatch"] += 1
 
             if i < len(library):
                 time.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
 
-    print(
-        f"\nOK: {counts['ok']}  Mismatch: {counts['mismatch']}  "
+    log.info(
+        f"OK: {counts['ok']}  Mismatch: {counts['mismatch']}  "
         f"Missing: {counts['missing']}  Incomplete: {counts['incomplete']}  "
         f"Unknown: {counts['unknown']}"
     )
