@@ -201,7 +201,20 @@ def request_license(client, asin):
 
 
 def license_url(dl):
-    return dl["content_license"]["content_metadata"]["content_url"]["offline_url"]
+    """The download URL out of a license response.
+
+    A refusal comes back as a normal response with no content_url in it, so
+    reaching straight for the URL turns an explained "Denied" into a bare
+    KeyError. Some titles in a library — Audible Originals in particular — are
+    listenable but were never licensed for download, and no amount of retrying
+    changes that; the server's own wording is the useful thing to report."""
+    lic = dl.get("content_license") or {}
+    url = ((lic.get("content_metadata") or {}).get("content_url") or {}).get("offline_url")
+    if not url:
+        status = lic.get("status_code") or "no download URL"
+        message = lic.get("message") or "license response carried no content_url"
+        raise RuntimeError(f"{status}: {message}")
+    return url
 
 
 def expected_size(client, asin):
