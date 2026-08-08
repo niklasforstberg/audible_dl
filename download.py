@@ -31,6 +31,10 @@ VOUCHER_DIRNAME = "vouchers"
 # one size lookup per book to rebuild.
 MANIFEST_NAME = "library.json"
 
+# The Audiobookshelf library root, inside the books folder. Only decoded .m4b
+# files go here — ABS never needs to see the .aaxc downloads or the vouchers.
+ABS_DIRNAME = "library"
+
 # The two container formats Audible hands out.
 EXTS = ("aax", "aaxc")
 
@@ -54,7 +58,7 @@ def get_library(client):
             "1.0/library",
             num_results=1000,
             page=page,
-            response_groups="product_desc,product_attrs",
+            response_groups="product_desc,product_attrs,contributors,series",
         )
         items = resp.get("items", [])
         if not items:
@@ -64,12 +68,73 @@ def get_library(client):
     return books
 
 
+def safe_name(text):
+    """A single path component, stripped of anything awkward in a filename.
+
+    Deliberately conservative, and deliberately frozen: this decides the name of
+    every .aax/.aaxc on disk, so loosening it would make already-downloaded books
+    look missing and fetch the whole library again."""
+    return "".join(c for c in text if c.isalnum() or c in " -_").strip()
+
+
+# Characters that are unsafe in a path component, plus the ones Windows rejects
+# — harmless to exclude here and it keeps the shelf portable.
+UNSAFE_PATH_CHARS = set('/\\:*?"<>|')
+
+
+def safe_component(text):
+    """A folder name for the shelf. Unlike safe_name this keeps punctuation, so
+    "Iain M. Banks" and "Destiny's Crucible" survive intact — Audiobookshelf
+    matches books against Audible by author and title, and stripped names miss."""
+    cleaned = "".join(" " if c in UNSAFE_PATH_CHARS or ord(c) < 32 else c for c in text)
+    # A component that is all dots, or ends in one, confuses some filesystems.
+    return " ".join(cleaned.split()).strip(". ")
+
+
 def book_stem(item):
     """Filename for a library item, without extension. The single definition —
     check.py and decode.py derive their filenames from this one."""
     title = item.get("title", item["asin"])
-    safe_title = "".join(c for c in title if c.isalnum() or c in " -_").strip()
-    return f"{safe_title} [{item['asin']}]"
+    return f"{safe_name(title)} [{item['asin']}]"
+
+
+def book_meta(item):
+    """The parts of a library item that decide where its .m4b is filed.
+    Recorded in the manifest so decode.py needs no network of its own."""
+    authors = [a["name"] for a in (item.get("authors") or []) if a.get("name")]
+    series = (item.get("series") or [None])[0]
+    return {
+        "title": item.get("title") or item["asin"],
+        "authors": authors,
+        "series": (series or {}).get("title"),
+        "sequence": (series or {}).get("sequence"),
+    }
+
+
+def abs_dir(asin, meta):
+    """Where a book's .m4b lives, relative to the Audiobookshelf library root.
+
+    ABS reads {Author}/{Series}/{Book} or {Author}/{Book} from the folder names.
+    A series sequence has to lead the book folder and be followed by " - " —
+    it keeps its decimal, so a "Book 7.5" side story still sorts where it should.
+    """
+    author = safe_component(authors_label(meta)) or "Unknown Author"
+    title = safe_component(meta.get("title") or "") or asin
+
+    series = safe_component(meta.get("series") or "")
+    if not series:
+        return Path(author) / title
+
+    seq = (meta.get("sequence") or "").strip()
+    return Path(author) / series / (f"{seq} - {title}" if seq else title)
+
+
+def authors_label(meta):
+    """One author for the folder name. ABS treats the author folder as a single
+    name, so co-authored books file under the first — the full list still rides
+    along in the file's own tags."""
+    authors = meta.get("authors") or []
+    return authors[0] if authors else ""
 
 
 def find_local(books_dir, stem):
@@ -262,6 +327,12 @@ def main():
             print(f"[{i}/{len(library)}] {title}")
 
             verdict, detail = local_verdict(out_dir, item, manifest)
+
+            # The listing is already in hand, so recording where this book should
+            # be filed costs nothing and needs no download — books that are
+            # already complete pick up their metadata here too.
+            manifest.setdefault(asin, {}).update(book_meta(item))
+
             if verdict == "ok":
                 print(f"  ok: {detail.name}")
                 counts["ok"] += 1
@@ -274,23 +345,23 @@ def main():
                     local = detail
                     size = expected_size(client, asin)
                     if size is not None and local.stat().st_size == size:
-                        manifest[asin] = {
+                        manifest[asin].update({
                             "file": local.name,
                             "size": size,
                             "voucher": find_voucher(out_dir, book_stem(item)) is not None,
                             "quality": QUALITY,
-                        }
+                        })
                         save_manifest(out_dir, manifest)
                         print(f"  ok: {local.name} (verified against server)")
                         counts["ok"] += 1
                     else:
                         print(f"  re-downloading: size {local.stat().st_size} on disk, {size} on server")
-                        manifest[asin] = download_book(client, item, out_dir)
+                        manifest[asin].update(download_book(client, item, out_dir))
                         save_manifest(out_dir, manifest)
                         counts["downloaded"] += 1
                 else:
                     print(f"  downloading: {detail}")
-                    manifest[asin] = download_book(client, item, out_dir)
+                    manifest[asin].update(download_book(client, item, out_dir))
                     save_manifest(out_dir, manifest)
                     counts["downloaded"] += 1
             except Exception as e:
@@ -304,6 +375,10 @@ def main():
                 delay = random.uniform(MIN_DELAY, MAX_DELAY)
                 print(f"  waiting {delay:.0f}s ...")
                 time.sleep(delay)
+
+    # Books that needed no download never hit a save above, so persist the
+    # metadata picked up for them in one go.
+    save_manifest(out_dir, manifest)
 
     print(
         f"\nOK: {counts['ok']}  Downloaded: {counts['downloaded']}  "

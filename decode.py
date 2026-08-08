@@ -21,7 +21,7 @@ from pathlib import Path
 import audible
 from audible.aescipher import _decrypt_voucher
 
-from download import find_voucher
+from download import ABS_DIRNAME, abs_dir, find_voucher, load_manifest
 
 AUTH_FILE = "auth.json"
 DEFAULT_BOOKS_DIR = Path.home() / "books"
@@ -34,20 +34,38 @@ def major_brand(path):
     return header[8:12].decode("ascii", "replace").strip()
 
 
+def asin_of(book):
+    """The ASIN download.py wrote into the filename, e.g. 'B0ABC12345'."""
+    m = re.search(r"\[([A-Z0-9]+)\]", book.stem)
+    if not m:
+        raise ValueError(f"no ASIN in filename: {book.name}")
+    return m.group(1)
+
+
+def output_path(books_dir, book, manifest):
+    """Where this book's .m4b belongs, in the Audiobookshelf tree.
+
+    The layout comes from the metadata download.py recorded in the manifest.
+    A book with no metadata yet (manifest deleted, or downloaded before this
+    existed) keeps the old flat name beside its source, so it still decodes."""
+    meta = manifest.get(asin_of(book)) or {}
+    if not meta.get("title"):
+        return book.with_suffix(".m4b")
+    folder = abs_dir(asin_of(book), meta)
+    return books_dir / ABS_DIRNAME / folder / f"{book.stem}.m4b"
+
+
 def voucher_key_iv(book, auth):
     """Decrypt <book>.voucher into (key, iv) hex strings for an AAXC file."""
     voucher_file = find_voucher(book.parent, book.stem)
     if voucher_file is None:
         raise FileNotFoundError(f"missing voucher for: {book.name}")
-    m = re.search(r"\[([A-Z0-9]+)\]", book.stem)
-    if not m:
-        raise ValueError(f"no ASIN in filename: {book.name}")
     di, ci = auth.device_info, auth.customer_info
     voucher = _decrypt_voucher(
         device_serial_number=di["device_serial_number"],
         customer_id=ci["user_id"],
         device_type=di["device_type"],
-        asin=m.group(1),
+        asin=asin_of(book),
         voucher=voucher_file.read_text().strip(),
     )
     return voucher["key"], voucher["iv"]
@@ -101,6 +119,7 @@ def main():
     books_dir = Path(args.books_dir)
 
     auth = audible.Authenticator.from_file(AUTH_FILE)
+    manifest = load_manifest(books_dir)
 
     # activation_bytes needs a network call, so fetch it only if an AAX file
     # actually turns up (an all-AAXC library never needs it).
@@ -116,10 +135,25 @@ def main():
 
     print(f"Found {len(books)} files to decode.")
     for i, book in enumerate(books, 1):
-        out = book.with_suffix(".m4b")
         print(f"[{i}/{len(books)}] {book.name}")
+        try:
+            out = output_path(books_dir, book, manifest)
+        except ValueError as e:
+            print(f"  error: {e}")
+            continue
+
         if out.exists():
             print(f"  skipping (already exists): {out.name}")
+            continue
+
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        # Decoding is the expensive part, so a book decoded before the shelf
+        # layout existed is moved into place rather than decoded again.
+        flat = book.with_suffix(".m4b")
+        if flat != out and flat.exists():
+            flat.replace(out)
+            print(f"  filed: {out.relative_to(books_dir)}")
             continue
 
         try:

@@ -21,11 +21,31 @@ Every script takes an optional folder argument
 ```
 books/
   A Book [B0ABC12345].aaxc     the download
-  A Book [B0ABC12345].m4b      the decoded result
   library.json                 what each finished download should look like
   vouchers/
     A Book [B0ABC12345].voucher
+  library/                     the Audiobookshelf library root
+    Iain M. Banks/
+      Culture/
+        8 - Matter/
+          Matter [B0DEF67890].m4b
+    A. Writer/
+      Some Standalone/
+        Some Standalone [B0ABC12345].m4b
 ```
+
+The decoded `.m4b` files go under `library/` in the layout Audiobookshelf
+expects — `{Author}/{Series}/{Book}`, or `{Author}/{Book}` for a standalone.
+A series sequence leads the book folder and is followed by `" - "`, which is
+what ABS parses; decimals survive, so a "Book 7.5" side story sorts correctly.
+Point an Audiobookshelf library at `books/library` and it will never see the
+downloads or the vouchers.
+
+The author and series names come from `library.json`, which `download.py`
+fills in from the Audible library listing on every run — including for books
+that are already complete, so the metadata backfills without re-downloading
+anything. A book whose metadata isn't recorded yet decodes to the old flat
+name beside its source.
 
 ## Re-running download.py
 
@@ -56,6 +76,11 @@ server each, once; the answer is then recorded like any other.
   duration, right chapters — but its audio is unplayable noise. `verify.py`
   test-decodes each `.m4b` and lists the bad ones; it needs only ffmpeg, no
   auth and no network.
+- Audiobookshelf needs only the `.m4b` — chapters, cover and tags are embedded
+  in it. Deleting the `.aaxc` originals to save space is possible but not free:
+  `download.py` decides what to re-fetch from the presence and size of those
+  files, so a deleted original looks like a missing book and gets downloaded
+  again on the next run.
 - The download requires an app-like `User-Agent`, otherwise CloudFront responds `403`.
 - The pause (`MIN_DELAY`/`MAX_DELAY` in `download.py`) exists to avoid
   unnecessarily loading the server. It only applies to books that are actually

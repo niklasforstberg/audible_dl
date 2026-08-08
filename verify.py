@@ -89,7 +89,9 @@ def main():
 
     setup_logging(args.log)
 
-    books = sorted(books_dir.glob("*.m4b"))
+    # Recursive: decode.py files books into an Audiobookshelf tree under the
+    # books folder, and older runs left them flat beside the downloads.
+    books = sorted(books_dir.rglob("*.m4b"))
     if not books:
         raise SystemExit(f"No .m4b files in {books_dir} — run decode.py first.")
 
