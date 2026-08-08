@@ -59,6 +59,25 @@ seconds.
 Books downloaded before `library.json` existed cost one size lookup against the
 server each, once; the answer is then recorded like any other.
 
+## Books the server won't license
+
+Some titles sit in a library, listenable, that Audible never licensed for
+download — Audible Originals in particular. The licence request comes back
+`Denied` with a reason, and it will come back `Denied` every time.
+
+Those refusals are recorded in `library.json` (`denied`, `denied_at`), and
+later runs skip the book without spending a request or a pause. That matters
+for a scheduled run: a handful of permanently-refused books would otherwise
+add minutes and an error to every single run.
+
+To ask again — because a licence really can change:
+
+```bash
+python download.py --retry-denied
+```
+
+A successful download clears the record; a fresh refusal rewrites it.
+
 ## Notes
 
 - `auth.json` contains your session — don't share it, don't commit it to git.

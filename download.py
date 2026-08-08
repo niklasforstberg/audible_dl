@@ -11,6 +11,7 @@ Run auth.py first to create auth.json.
 Usage: python download.py [OUT_DIR]   (OUT_DIR defaults to ~/books)
 """
 import argparse
+import datetime
 import json
 import os
 import random
@@ -200,21 +201,30 @@ def request_license(client, asin):
     )
 
 
+class LicenseDenied(RuntimeError):
+    """The server declined to license this book for download. Distinct from a
+    network failure: it is an answer, not an outage, and repeating the request
+    gets the same answer."""
+
+
 def license_url(dl):
     """The download URL out of a license response.
 
     A refusal comes back as a normal response with no content_url in it, so
     reaching straight for the URL turns an explained "Denied" into a bare
     KeyError. Some titles in a library — Audible Originals in particular — are
-    listenable but were never licensed for download, and no amount of retrying
-    changes that; the server's own wording is the useful thing to report."""
+    listenable but were never licensed for download; the server's own wording
+    is the useful thing to report."""
     lic = dl.get("content_license") or {}
     url = ((lic.get("content_metadata") or {}).get("content_url") or {}).get("offline_url")
-    if not url:
-        status = lic.get("status_code") or "no download URL"
-        message = lic.get("message") or "license response carried no content_url"
-        raise RuntimeError(f"{status}: {message}")
-    return url
+    if url:
+        return url
+
+    status = lic.get("status_code") or "no download URL"
+    message = lic.get("message") or "license response carried no content_url"
+    if lic.get("status_code") == "Denied":
+        raise LicenseDenied(f"{status}: {message}")
+    raise RuntimeError(f"{status}: {message}")
 
 
 def expected_size(client, asin):
@@ -231,13 +241,22 @@ def expected_size(client, asin):
         return int(r.headers.get("Content-Length", 0)) or None
 
 
-def local_verdict(out_dir, item, manifest):
+def local_verdict(out_dir, item, manifest, retry_denied=False):
     """Judge a book from local files alone — no network. Returns (verdict, detail):
       "ok"         nothing to do
       "fetch"      must be downloaded, detail says why
       "unverified" present, but we never recorded its size; needs a server check
+      "denied"     the server refused to license it, and said so before
     """
     stem = book_stem(item)
+
+    # A refusal is remembered so a scheduled run doesn't spend a request and a
+    # pause re-asking a question that was already answered. --retry-denied asks
+    # again, for when the licence situation may genuinely have changed.
+    record = manifest.get(item["asin"]) or {}
+    if record.get("denied") and not retry_denied:
+        return "denied", record["denied"]
+
     local = find_local(out_dir, stem)
 
     if local is None:
@@ -245,8 +264,7 @@ def local_verdict(out_dir, item, manifest):
             return "fetch", "incomplete (.part only)"
         return "fetch", "missing"
 
-    record = manifest.get(item["asin"])
-    if not record or record.get("size") is None:
+    if record.get("size") is None:
         return "unverified", local
     if record.get("quality") != QUALITY:
         return "fetch", f"downloaded at quality {record.get('quality')}, want {QUALITY}"
@@ -318,6 +336,11 @@ def main():
         default=str(DEFAULT_OUT_DIR),
         help="target folder (default: ~/books)",
     )
+    parser.add_argument(
+        "--retry-denied",
+        action="store_true",
+        help="ask again about books the server previously refused to license",
+    )
     args = parser.parse_args()
     out_dir = Path(args.out_dir)
 
@@ -327,7 +350,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     auth = audible.Authenticator.from_file(AUTH_FILE)
     manifest = load_manifest(out_dir)
-    counts = {"ok": 0, "downloaded": 0, "failed": 0}
+    counts = {"ok": 0, "downloaded": 0, "denied": 0, "failed": 0}
     failed = []
 
     with audible.Client(auth=auth) as client:
@@ -339,19 +362,29 @@ def main():
             title = item.get("title", asin)
             print(f"[{i}/{len(library)}] {title}")
 
-            verdict, detail = local_verdict(out_dir, item, manifest)
-
             # The listing is already in hand, so recording where this book should
             # be filed costs nothing and needs no download — books that are
             # already complete pick up their metadata here too.
             manifest.setdefault(asin, {}).update(book_meta(item))
+
+            verdict, detail = local_verdict(out_dir, item, manifest, args.retry_denied)
 
             if verdict == "ok":
                 print(f"  ok: {detail.name}")
                 counts["ok"] += 1
                 continue  # no server call, so no pause either
 
+            if verdict == "denied":
+                print(f"  skipping (refused before): {detail}")
+                counts["denied"] += 1
+                continue  # settled by the manifest, so no server call and no pause
+
             try:
+                # Any attempt that gets this far supersedes a remembered refusal;
+                # if the answer is still no, it gets written down again below.
+                manifest[asin].pop("denied", None)
+                manifest[asin].pop("denied_at", None)
+
                 if verdict == "unverified":
                     # Downloaded before the manifest existed: ask once, record it,
                     # and only re-download if the size actually disagrees.
@@ -377,6 +410,15 @@ def main():
                     manifest[asin].update(download_book(client, item, out_dir))
                     save_manifest(out_dir, manifest)
                     counts["downloaded"] += 1
+            except LicenseDenied as e:
+                # An answer, not an outage — remember it so later runs cost nothing.
+                print(f"  denied: {e}")
+                manifest[asin].update({
+                    "denied": str(e),
+                    "denied_at": datetime.date.today().isoformat(),
+                })
+                save_manifest(out_dir, manifest)
+                counts["denied"] += 1
             except Exception as e:
                 print(f"  error: {e}")
                 counts["failed"] += 1
@@ -395,8 +437,13 @@ def main():
 
     print(
         f"\nOK: {counts['ok']}  Downloaded: {counts['downloaded']}  "
-        f"Failed: {counts['failed']}"
+        f"Denied: {counts['denied']}  Failed: {counts['failed']}"
     )
+    if counts["denied"]:
+        print(
+            f"{counts['denied']} book(s) the server won't license for download. "
+            "They cost nothing on later runs; use --retry-denied to ask again."
+        )
     if failed:
         # Errors scroll away over a run this long, so repeat them at the end.
         print("\nFailed books (re-run to retry them):")
