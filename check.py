@@ -9,6 +9,7 @@ import argparse
 import logging
 import os
 import random
+import shlex
 import time
 from pathlib import Path
 
@@ -71,8 +72,18 @@ def find_local(books_dir, stem):
     return None
 
 
-def has_part(books_dir, stem):
-    return any((books_dir / f"{stem}.{ext}.part").exists() for ext in ("aax", "aaxc"))
+def find_part(books_dir, stem):
+    for ext in ("aax", "aaxc"):
+        path = books_dir / f"{stem}.{ext}.part"
+        if path.exists():
+            return path
+    return None
+
+
+def quoted(path):
+    """Full path, shell-quoted so it can be pasted straight into a terminal
+    (book filenames contain spaces and [ASIN] brackets)."""
+    return shlex.quote(str(path))
 
 
 def main():
@@ -112,29 +123,31 @@ def main():
 
             local = find_local(books_dir, stem)
             if local is None:
-                if has_part(books_dir, stem):
-                    log.info(f"{prefix} INCOMPLETE (.part only): {stem}")
+                part = find_part(books_dir, stem)
+                if part is not None:
+                    log.info(f"{prefix} INCOMPLETE (.part only): {quoted(part)}")
                     counts["incomplete"] += 1
                 else:
-                    log.info(f"{prefix} MISSING: {stem}")
+                    # Nothing on disk to point at, so name the book instead.
+                    log.info(f"{prefix} MISSING: {title} [{asin}]")
                     counts["missing"] += 1
                 continue
 
             try:
                 exp = expected_size(client, asin)
             except Exception as e:
-                log.info(f"{prefix} ERROR checking {stem}: {e}")
+                log.info(f"{prefix} ERROR checking {quoted(local)}: {e}")
                 counts["unknown"] += 1
             else:
                 actual = local.stat().st_size
                 if exp is None:
-                    log.info(f"{prefix} UNKNOWN (server gave no size): {local.name} — local {actual} bytes")
+                    log.info(f"{prefix} UNKNOWN (server gave no size): {quoted(local)} — local {actual} bytes")
                     counts["unknown"] += 1
                 elif actual == exp:
-                    log.info(f"{prefix} OK: {local.name} ({actual} bytes)")
+                    log.info(f"{prefix} OK: {quoted(local)} ({actual} bytes)")
                     counts["ok"] += 1
                 else:
-                    log.info(f"{prefix} MISMATCH: {local.name} — local {actual}, expected {exp}")
+                    log.info(f"{prefix} MISMATCH: {quoted(local)} — local {actual}, expected {exp}")
                     counts["mismatch"] += 1
 
             if i < len(library):
