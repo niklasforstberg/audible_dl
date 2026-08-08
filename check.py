@@ -14,9 +14,15 @@ import time
 from pathlib import Path
 
 import audible
-import httpx
 
-from download import AUTH_FILE, DOWNLOAD_UA, QUALITY, get_library
+from download import (
+    AUTH_FILE,
+    book_stem,
+    expected_size,
+    find_local,
+    find_part,
+    get_library,
+)
 
 DEFAULT_BOOKS_DIR = Path.home() / "books"
 DEFAULT_LOG_FILE = "check.log"
@@ -39,45 +45,6 @@ def setup_logging(log_file):
 # Small polite pause between the metadata calls (seconds).
 MIN_DELAY = 1
 MAX_DELAY = 3
-
-
-def expected_size(client, asin):
-    """Return the download's total byte size without downloading its body."""
-    dl = client.post(
-        f"content/{asin}/licenserequest",
-        body={
-            "consumption_type": "Download",
-            "drm_type": "Adrm",
-            "quality": QUALITY,
-            "response_groups": "last_position_heard,content_reference,chapter_info",
-        },
-    )
-    url = dl["content_license"]["content_metadata"]["content_url"]["offline_url"]
-
-    # Ranged GET: read only the size header, then close without reading the body.
-    headers = {**DOWNLOAD_UA, "Range": "bytes=0-0"}
-    with httpx.stream("GET", url, follow_redirects=True, timeout=60, headers=headers) as r:
-        r.raise_for_status()
-        content_range = r.headers.get("Content-Range")  # "bytes 0-0/12345"
-        if content_range and "/" in content_range:
-            return int(content_range.rsplit("/", 1)[-1])
-        return int(r.headers.get("Content-Length", 0)) or None
-
-
-def find_local(books_dir, stem):
-    for ext in ("aax", "aaxc"):
-        path = books_dir / f"{stem}.{ext}"
-        if path.exists():
-            return path
-    return None
-
-
-def find_part(books_dir, stem):
-    for ext in ("aax", "aaxc"):
-        path = books_dir / f"{stem}.{ext}.part"
-        if path.exists():
-            return path
-    return None
 
 
 def quoted(path):
@@ -117,8 +84,7 @@ def main():
         for i, item in enumerate(library, 1):
             asin = item["asin"]
             title = item.get("title", asin)
-            safe_title = "".join(c for c in title if c.isalnum() or c in " -_").strip()
-            stem = f"{safe_title} [{asin}]"
+            stem = book_stem(item)
             prefix = f"[{i}/{len(library)}]"
 
             local = find_local(books_dir, stem)

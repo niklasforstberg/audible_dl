@@ -21,6 +21,8 @@ from pathlib import Path
 import audible
 from audible.aescipher import _decrypt_voucher
 
+from download import find_voucher
+
 AUTH_FILE = "auth.json"
 DEFAULT_BOOKS_DIR = Path.home() / "books"
 
@@ -34,9 +36,9 @@ def major_brand(path):
 
 def voucher_key_iv(book, auth):
     """Decrypt <book>.voucher into (key, iv) hex strings for an AAXC file."""
-    voucher_file = book.with_suffix(".voucher")
-    if not voucher_file.exists():
-        raise FileNotFoundError(f"missing voucher: {voucher_file.name}")
+    voucher_file = find_voucher(book.parent, book.stem)
+    if voucher_file is None:
+        raise FileNotFoundError(f"missing voucher for: {book.name}")
     m = re.search(r"\[([A-Z0-9]+)\]", book.stem)
     if not m:
         raise ValueError(f"no ASIN in filename: {book.name}")

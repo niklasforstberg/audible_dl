@@ -1,10 +1,17 @@
 """Download the whole library, one book at a time with a randomized pause in between.
 
+Re-running is cheap and repairs the folder: every finished download records its
+byte size in library.json, so a later run re-checks each book against that
+record locally and only re-downloads the ones that are missing, truncated or
+have lost their voucher. Books already present from before the manifest existed
+cost one size lookup against the server, once.
+
 Run auth.py first to create auth.json.
 
 Usage: python download.py [OUT_DIR]   (OUT_DIR defaults to ~/books)
 """
 import argparse
+import json
 import os
 import random
 import time
@@ -16,9 +23,21 @@ import httpx
 AUTH_FILE = "auth.json"
 DEFAULT_OUT_DIR = Path.home() / "books"
 
-# Randomized pause between each download (seconds). Easy on the server.
-MIN_DELAY = 45
-MAX_DELAY = 180
+# Vouchers live in their own subfolder to keep the book folder readable.
+VOUCHER_DIRNAME = "vouchers"
+
+# What we know about each finished download, keyed by ASIN. Lives with the books
+# rather than in the repo, and is safe to delete — a missing manifest only costs
+# one size lookup per book to rebuild.
+MANIFEST_NAME = "library.json"
+
+# The two container formats Audible hands out.
+EXTS = ("aax", "aaxc")
+
+# Randomized pause between each download (seconds). Easy on the server. Only
+# applies to books we actually fetch; locally verified ones cost nothing.
+MIN_DELAY = 10
+MAX_DELAY = 20
 
 # Audio quality: "High", "Normal" or "Extreme".
 QUALITY = "High"
@@ -45,26 +64,67 @@ def get_library(client):
     return books
 
 
-def book_exists(out_dir, stem):
-    # A file only gets its final name once it's fully downloaded (see the .part
-    # rename below), so an existing book file is guaranteed complete.
-    return any((out_dir / f"{stem}.{ext}").exists() for ext in ("aax", "aaxc"))
-
-
-def download_book(client, item, out_dir):
-    """Download one book. Returns True if it contacted the download server,
-    False if the book already existed and was skipped."""
-    asin = item["asin"]
-    title = item.get("title", asin)
+def book_stem(item):
+    """Filename for a library item, without extension. The single definition —
+    check.py and decode.py derive their filenames from this one."""
+    title = item.get("title", item["asin"])
     safe_title = "".join(c for c in title if c.isalnum() or c in " -_").strip()
-    stem = f"{safe_title} [{asin}]"
+    return f"{safe_title} [{item['asin']}]"
 
-    if book_exists(out_dir, stem):
-        print(f"  skipping (already exists): {stem}")
-        return False
 
-    # Get the download link for the AAXC file.
-    dl = client.post(
+def find_local(books_dir, stem):
+    """The downloaded book file, whichever container it turned out to be."""
+    for ext in EXTS:
+        path = books_dir / f"{stem}.{ext}"
+        if path.exists():
+            return path
+    return None
+
+
+def find_part(books_dir, stem):
+    """A leftover .part file from an interrupted download."""
+    for ext in EXTS:
+        path = books_dir / f"{stem}.{ext}.part"
+        if path.exists():
+            return path
+    return None
+
+
+def find_voucher(books_dir, stem):
+    """The book's .voucher, from the vouchers/ subfolder or — for books
+    downloaded before that folder existed — from beside the book itself."""
+    for candidate in (
+        books_dir / VOUCHER_DIRNAME / f"{stem}.voucher",
+        books_dir / f"{stem}.voucher",
+    ):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def load_manifest(books_dir):
+    path = books_dir / MANIFEST_NAME
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        # A corrupt manifest costs a re-check, not the library. Don't die on it.
+        print(f"  warning: ignoring unreadable {MANIFEST_NAME}: {e}")
+        return {}
+
+
+def save_manifest(books_dir, manifest):
+    """Write via a temp file so an interrupted run can't truncate the manifest."""
+    path = books_dir / MANIFEST_NAME
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    os.replace(tmp, path)
+
+
+def request_license(client, asin):
+    """Ask for a download license — the URL plus, for AAXC, the voucher."""
+    return client.post(
         f"content/{asin}/licenserequest",
         body={
             "consumption_type": "Download",
@@ -73,8 +133,65 @@ def download_book(client, item, out_dir):
             "response_groups": "last_position_heard,content_reference,chapter_info",
         },
     )
-    content_metadata = dl["content_license"]["content_metadata"]
-    url = content_metadata["content_url"]["offline_url"]
+
+
+def license_url(dl):
+    return dl["content_license"]["content_metadata"]["content_url"]["offline_url"]
+
+
+def expected_size(client, asin):
+    """The download's total byte size, without downloading its body."""
+    url = license_url(request_license(client, asin))
+
+    # Ranged GET: read only the size header, then close without reading the body.
+    headers = {**DOWNLOAD_UA, "Range": "bytes=0-0"}
+    with httpx.stream("GET", url, follow_redirects=True, timeout=60, headers=headers) as r:
+        r.raise_for_status()
+        content_range = r.headers.get("Content-Range")  # "bytes 0-0/12345"
+        if content_range and "/" in content_range:
+            return int(content_range.rsplit("/", 1)[-1])
+        return int(r.headers.get("Content-Length", 0)) or None
+
+
+def local_verdict(out_dir, item, manifest):
+    """Judge a book from local files alone — no network. Returns (verdict, detail):
+      "ok"         nothing to do
+      "fetch"      must be downloaded, detail says why
+      "unverified" present, but we never recorded its size; needs a server check
+    """
+    stem = book_stem(item)
+    local = find_local(out_dir, stem)
+
+    if local is None:
+        if find_part(out_dir, stem):
+            return "fetch", "incomplete (.part only)"
+        return "fetch", "missing"
+
+    record = manifest.get(item["asin"])
+    if not record or record.get("size") is None:
+        return "unverified", local
+    if record.get("quality") != QUALITY:
+        return "fetch", f"downloaded at quality {record.get('quality')}, want {QUALITY}"
+
+    actual = local.stat().st_size
+    if actual != record["size"]:
+        return "fetch", f"wrong size: {actual} on disk, {record['size']} expected"
+
+    # A book whose voucher went missing can never be decoded, and nothing else
+    # would ever notice — the book file itself looks perfectly complete.
+    if record.get("voucher") and find_voucher(out_dir, stem) is None:
+        return "fetch", "voucher missing"
+
+    return "ok", local
+
+
+def download_book(client, item, out_dir):
+    """Download one book, replacing whatever is already there. Returns the
+    manifest record describing the finished file."""
+    stem = book_stem(item)
+
+    dl = request_license(client, item["asin"])
+    url = license_url(dl)
     ext = url.split("?")[0].rsplit(".", 1)[-1].lower()  # aax or aaxc
 
     out_path = out_dir / f"{stem}.{ext}"
@@ -93,16 +210,26 @@ def download_book(client, item, out_dir):
     if expected and size != expected:
         part_path.unlink(missing_ok=True)
         raise RuntimeError(f"incomplete download: got {size} of {expected} bytes")
-    part_path.rename(out_path)
 
-    # Save the voucher (keys) for later decoding only now that the whole book is
-    # down, if present (applies to AAXC).
+    # Save the voucher (the AAXC decryption keys) *before* the rename: the final
+    # name is what marks a book as complete, and a book that exists without its
+    # voucher can never be decoded and is never retried.
     voucher = dl["content_license"].get("license_response")
     if voucher:
-        (out_dir / f"{stem}.voucher").write_text(str(voucher))
+        voucher_dir = out_dir / VOUCHER_DIRNAME
+        voucher_dir.mkdir(parents=True, exist_ok=True)
+        (voucher_dir / f"{stem}.voucher").write_text(str(voucher))
+
+    # Replaces the old file if we are re-downloading a damaged one.
+    part_path.replace(out_path)
 
     print(f"  done: {out_path.name}")
-    return True
+    return {
+        "file": out_path.name,
+        "size": size,
+        "voucher": bool(voucher),
+        "quality": QUALITY,
+    }
 
 
 def main():
@@ -121,27 +248,72 @@ def main():
 
     out_dir.mkdir(parents=True, exist_ok=True)
     auth = audible.Authenticator.from_file(AUTH_FILE)
+    manifest = load_manifest(out_dir)
+    counts = {"ok": 0, "downloaded": 0, "failed": 0}
+    failed = []
 
     with audible.Client(auth=auth) as client:
         library = get_library(client)
         print(f"Found {len(library)} books in the library.")
 
         for i, item in enumerate(library, 1):
-            title = item.get("title", item["asin"])
+            asin = item["asin"]
+            title = item.get("title", asin)
             print(f"[{i}/{len(library)}] {title}")
+
+            verdict, detail = local_verdict(out_dir, item, manifest)
+            if verdict == "ok":
+                print(f"  ok: {detail.name}")
+                counts["ok"] += 1
+                continue  # no server call, so no pause either
+
             try:
-                downloaded = download_book(client, item, out_dir)
+                if verdict == "unverified":
+                    # Downloaded before the manifest existed: ask once, record it,
+                    # and only re-download if the size actually disagrees.
+                    local = detail
+                    size = expected_size(client, asin)
+                    if size is not None and local.stat().st_size == size:
+                        manifest[asin] = {
+                            "file": local.name,
+                            "size": size,
+                            "voucher": find_voucher(out_dir, book_stem(item)) is not None,
+                            "quality": QUALITY,
+                        }
+                        save_manifest(out_dir, manifest)
+                        print(f"  ok: {local.name} (verified against server)")
+                        counts["ok"] += 1
+                    else:
+                        print(f"  re-downloading: size {local.stat().st_size} on disk, {size} on server")
+                        manifest[asin] = download_book(client, item, out_dir)
+                        save_manifest(out_dir, manifest)
+                        counts["downloaded"] += 1
+                else:
+                    print(f"  downloading: {detail}")
+                    manifest[asin] = download_book(client, item, out_dir)
+                    save_manifest(out_dir, manifest)
+                    counts["downloaded"] += 1
             except Exception as e:
                 print(f"  error: {e}")
-                downloaded = True  # we hit the server; pause before the next one
+                counts["failed"] += 1
+                failed.append(f"{title} [{asin}]: {e}")
 
-            # Only pause after an actual download, not after a skipped book.
-            if downloaded and i < len(library):
+            # Everything still running here touched the server; books settled
+            # locally took the `continue` above and cost nothing.
+            if i < len(library):
                 delay = random.uniform(MIN_DELAY, MAX_DELAY)
                 print(f"  waiting {delay:.0f}s ...")
                 time.sleep(delay)
 
-    print("Done.")
+    print(
+        f"\nOK: {counts['ok']}  Downloaded: {counts['downloaded']}  "
+        f"Failed: {counts['failed']}"
+    )
+    if failed:
+        # Errors scroll away over a run this long, so repeat them at the end.
+        print("\nFailed books (re-run to retry them):")
+        for line in failed:
+            print(f"  {line}")
 
 
 if __name__ == "__main__":
