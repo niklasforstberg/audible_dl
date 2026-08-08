@@ -70,6 +70,12 @@ later runs skip the book without spending a request or a pause. That matters
 for a scheduled run: a handful of permanently-refused books would otherwise
 add minutes and an error to every single run.
 
+A refusal does not always mean the book is missing. Some were downloaded while
+the licence still held, and only the *size check* is refused now — that lookup
+needs a licence too. Such a book is reported `ok (size unverifiable)`: the file
+is on disk, has its voucher, and decodes normally. Only a refused book with no
+file is counted as denied.
+
 To ask again — because a licence really can change:
 
 ```bash

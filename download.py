@@ -246,7 +246,8 @@ def local_verdict(out_dir, item, manifest, retry_denied=False):
       "ok"         nothing to do
       "fetch"      must be downloaded, detail says why
       "unverified" present, but we never recorded its size; needs a server check
-      "denied"     the server refused to license it, and said so before
+      "denied"     refused a licence before, and nothing on disk to fall back on
+      "settled"    present, but its size can never be checked — see below
     """
     stem = book_stem(item)
 
@@ -254,17 +255,23 @@ def local_verdict(out_dir, item, manifest, retry_denied=False):
     # pause re-asking a question that was already answered. --retry-denied asks
     # again, for when the licence situation may genuinely have changed.
     record = manifest.get(item["asin"]) or {}
-    if record.get("denied") and not retry_denied:
-        return "denied", record["denied"]
+    denied = record.get("denied") and not retry_denied
 
     local = find_local(out_dir, stem)
 
     if local is None:
+        if denied:
+            return "denied", record["denied"]
         if find_part(out_dir, stem):
             return "fetch", "incomplete (.part only)"
         return "fetch", "missing"
 
     if record.get("size") is None:
+        # A refused licence blocks the size lookup too, since that also needs a
+        # licence. The book is downloaded and decodable, its size is simply not
+        # knowable — so take it as it is rather than asking again every run.
+        if denied:
+            return "settled", local
         return "unverified", local
     if record.get("quality") != QUALITY:
         return "fetch", f"downloaded at quality {record.get('quality')}, want {QUALITY}"
@@ -373,6 +380,11 @@ def main():
                 print(f"  ok: {detail.name}")
                 counts["ok"] += 1
                 continue  # no server call, so no pause either
+
+            if verdict == "settled":
+                print(f"  ok: {detail.name} (size unverifiable — licence refused)")
+                counts["ok"] += 1
+                continue  # the file is here; asking again would only be refused
 
             if verdict == "denied":
                 print(f"  skipping (refused before): {detail}")
