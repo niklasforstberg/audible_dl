@@ -41,6 +41,42 @@ what ABS parses; decimals survive, so a "Book 7.5" side story sorts correctly.
 Point an Audiobookshelf library at `books/library` and it will never see the
 downloads or the vouchers.
 
+## Decoding onto another machine
+
+When the downloads and the shelf live on different disks, `--ship-to` moves each
+book across as it is made instead of building the whole tree locally first:
+
+```bash
+python decode.py /mnt/storage/books --ship-to niklas@10.0.20.10:/mnt/books/library
+```
+
+Per book: decode → test-decode the audio → `rsync` it over → delete the local
+copy → record it in `library.json`. Peak local space is one book rather than the
+whole library, which is what makes this possible on a disk that could not hold
+both.
+
+The order matters. The audio is checked *before* the book ships and *before* the
+local copy is deleted, because a wrong-key decode is silent — right size, right
+chapters, noise — and shipping one would put a broken book on the shelf and
+throw away the evidence. Nothing is ever unrecoverable either way: the `.aaxc`
+originals stay put, so any lost or damaged `.m4b` costs CPU time, not data.
+
+Each run asks the shelf what it already holds — one `find` for the whole
+library, not a question per book — and compares it against `library.json`:
+
+```json
+"decoded": {
+  "path": "James S. A. Corey/The Expanse/3 - Abaddon's Gate/Abaddons Gate [B00T6ODYMC].m4b",
+  "size": 1074821394,
+  "at": "2026-08-09"
+}
+```
+
+The shelf is the authority, not the manifest. A book deleted over there is
+decoded and shipped again on the next run; one that arrived damaged has the
+wrong size and is redone. A failed transfer keeps the local copy, so the next
+run resumes instead of starting over.
+
 The author and series names come from `library.json`, which `download.py`
 fills in from the Audible library listing on every run — including for books
 that are already complete, so the metadata backfills without re-downloading
