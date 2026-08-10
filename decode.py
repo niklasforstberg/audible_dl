@@ -128,7 +128,8 @@ def ship(local, host, root, rel):
         check=True, capture_output=True, text=True,
     )
     subprocess.run(
-        ["rsync", "-a", str(local), f"{host}:{shlex.quote(str(target))}"],
+        ["rsync", "-a", "-e", "ssh -o BatchMode=yes",
+         str(local), f"{host}:{shlex.quote(str(target))}"],
         check=True, capture_output=True, text=True,
     )
 
