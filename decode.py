@@ -40,7 +40,7 @@ DEFAULT_BOOKS_DIR = Path.home() / "books"
 # --ship-to given) a book is decoded locally, checked, copied to the shelf and
 # the local copy deleted — so the decoding machine never holds the whole
 # library, only one book at a time. Leave it None to keep everything local.
-SHIP_TO = None  # e.g. "niklas@10.0.20.10:/mnt/books/library"
+SHIP_TO = None  # e.g. "niklas@10.0.20.10:/mnt/data/audiobooks"
 
 # How much audio to test-decode before a book is allowed onto the shelf. A book
 # decoded with the wrong key looks perfect and sounds like noise; shipping it
@@ -299,7 +299,9 @@ def main():
 
             # Decoded beside the downloads, never into a tree we are about to
             # delete — one book's worth of space at a time is the whole point.
-            out = books_dir / f"{book.stem}.m4b.staging"
+            # The name must still end in .m4b: ffmpeg picks the container
+            # from the extension.
+            out = books_dir / f"{book.stem}.staging.m4b"
         else:
             out = output_path(books_dir, book, manifest)
             if out.exists():

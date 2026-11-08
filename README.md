@@ -47,7 +47,7 @@ When the downloads and the shelf live on different disks, `--ship-to` moves each
 book across as it is made instead of building the whole tree locally first:
 
 ```bash
-python decode.py /mnt/storage/books --ship-to niklas@10.0.20.10:/mnt/books/library
+python decode.py /mnt/storage/books --ship-to niklas@10.0.20.10:/mnt/data/audiobooks
 ```
 
 Per book: decode → test-decode the audio → `rsync` it over → delete the local
