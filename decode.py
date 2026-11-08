@@ -127,9 +127,12 @@ def ship(local, host, root, rel):
         ["ssh", "-o", "BatchMode=yes", host, f"mkdir -p {shlex.quote(str(target.parent))}"],
         check=True, capture_output=True, text=True,
     )
+    # -s hands the remote path over verbatim, spaces and brackets included.
+    # It must not be shell-quoted as well: rsync 3.2.4+ protects remote args
+    # by default and would take the quotes as part of the filename.
     subprocess.run(
-        ["rsync", "-a", "-e", "ssh -o BatchMode=yes",
-         str(local), f"{host}:{shlex.quote(str(target))}"],
+        ["rsync", "-a", "-s", "-e", "ssh -o BatchMode=yes",
+         str(local), f"{host}:{target}"],
         check=True, capture_output=True, text=True,
     )
 
