@@ -120,8 +120,7 @@ def ship(local, host, root, rel):
 
     rsync transfers to a temporary name and renames on success, so an
     interrupted copy can never leave something that looks like a whole book;
-    it also checksums what it wrote. A failure raises, and the caller keeps
-    the local file rather than deleting it."""
+    it also checksums what it wrote. A failure raises."""
     target = PurePosixPath(root) / rel
     subprocess.run(
         ["ssh", "-o", "BatchMode=yes", host, f"mkdir -p {shlex.quote(str(target.parent))}"],
@@ -348,7 +347,10 @@ def main():
         try:
             ship(out, host, root, rel)
         except subprocess.CalledProcessError as e:
-            # The local copy stays, so the next run resumes rather than redoes.
+            # Not kept: the next run decodes afresh anyway, and when shipping
+            # fails it usually fails for every book, which would otherwise
+            # pile the whole library up here.
+            out.unlink(missing_ok=True)
             print(f"  error shipping: {last_line(e.stderr)}")
             counts["failed"] += 1
             continue

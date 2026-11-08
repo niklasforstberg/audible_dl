@@ -74,8 +74,9 @@ library, not a question per book — and compares it against `library.json`:
 
 The shelf is the authority, not the manifest. A book deleted over there is
 decoded and shipped again on the next run; one that arrived damaged has the
-wrong size and is redone. A failed transfer keeps the local copy, so the next
-run resumes instead of starting over.
+wrong size and is redone. A failed transfer deletes the local copy too, so a
+run that can't reach the shelf never fills the decoding disk; the book is
+simply decoded again next time.
 
 The author and series names come from `library.json`, which `download.py`
 fills in from the Audible library listing on every run — including for books
